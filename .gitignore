@@ -1,0 +1,26 @@
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Misc
+.DS_Store
+.env
+*.log
+
+# Build
+build/
+dist/
+
+# Documentation
+docs/
+
+# Test
+coverage/
+
+# Database
+generated
+*.db

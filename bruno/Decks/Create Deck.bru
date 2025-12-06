@@ -1,0 +1,48 @@
+meta {
+  name: Create Deck
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/decks
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "My Starter Deck",
+    "cards": [
+      "001", "004", "007", "025", "001",
+      "002", "005", "008", "026", "002",
+      "003", "006", "009", "027", "003",
+      "010", "013", "016", "019", "021"
+    ]
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("deckId", res.body.id);
+  }
+}
+
+docs {
+  Create a new deck for the authenticated user.
+
+  Requires authentication.
+
+  Body:
+  - name: string (required) - Name of the deck
+  - cards: array of strings (required) - Must contain exactly 20 card IDs
+
+  Returns:
+  - 201: Deck created successfully
+  - 400: Invalid input (must be exactly 20 valid card IDs)
+  - 401: Unauthorized
+}

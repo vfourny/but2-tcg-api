@@ -1,0 +1,47 @@
+meta {
+  name: Update Deck
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/api/decks/{{deckId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Updated Deck Name",
+    "cards": [
+      "006", "009", "012", "015", "018",
+      "021", "024", "027", "030", "033",
+      "036", "039", "042", "045", "048",
+      "050", "053", "056", "059", "062"
+    ]
+  }
+}
+
+docs {
+  Update an existing deck.
+
+  Requires authentication and deck ownership.
+
+  Variables needed:
+  - deckId: The UUID of the deck to update (get from Get My Decks response)
+
+  Body:
+  - name: string (optional) - New name for the deck
+  - cards: array of strings (optional) - Must be exactly 20 valid card IDs if provided
+
+  Returns:
+  - 200: Deck updated successfully
+  - 400: Invalid input (must be exactly 20 valid card IDs if cards provided)
+  - 401: Unauthorized
+  - 403: Forbidden (not deck owner)
+  - 404: Deck not found
+}

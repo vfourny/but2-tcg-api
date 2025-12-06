@@ -1,0 +1,41 @@
+meta {
+  name: Get My Second Deck
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/decks/mine
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+script:post-response {
+  if (res.status === 200 && res.body.length > 1) {
+    bru.setVar("deckId", res.body[1].id);
+    console.log("Second deck ID saved:", res.body[1].id);
+  } else if (res.body.length === 1) {
+    console.log("Only one deck available, using first deck");
+    bru.setVar("deckId", res.body[0].id);
+  } else {
+    console.log("No decks available");
+  }
+}
+
+docs {
+  Get the SECOND deck of the authenticated user.
+
+  This is useful for testing with multiple decks or when you want to use a different deck than the first one.
+
+  Requires authentication.
+
+  Returns:
+  - 200: List of user's decks (automatically saves SECOND deck's ID to deckId variable)
+  - 401: Unauthorized
+
+  Note: If only one deck exists, it will use the first deck instead.
+}

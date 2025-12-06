@@ -1,0 +1,28 @@
+meta {
+  name: 5. Play Card
+  type: ws
+  seq: 5
+}
+
+ws {
+  url: ws://localhost:3001/socket.io/?EIO=4&transport=websocket
+}
+
+body {
+  42["playCard",{"roomId":"REMPLACER_PAR_ROOM_ID","cardIndex":0}]
+}
+
+docs {
+  Place une carte de votre main sur le board.
+
+  **Format du message:**
+  - "42["playCard",{"roomId":"...","cardIndex":0}]"
+
+  **Paramètres:**
+  - roomId: ID de la room
+  - cardIndex: Index de la carte (0-4)
+
+  **Conditions:**
+  - Doit être votre tour
+  - Pas de Pokemon actif déjà sur le board
+}

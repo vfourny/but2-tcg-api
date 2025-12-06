@@ -1,0 +1,45 @@
+meta {
+  name: Update Only Cards
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/api/decks/{{deckId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "cards": [
+      "025", "025", "025", "025", "026",
+      "026", "026", "026", "001", "001",
+      "002", "002", "003", "003", "004",
+      "004", "005", "005", "006", "006"
+    ]
+  }
+}
+
+docs {
+  Update only the cards of a deck (without changing name).
+
+  Requires authentication and deck ownership.
+
+  Variables needed:
+  - deckId: The UUID of the deck to update (get from Get My Decks response)
+
+  Body:
+  - cards: array of strings - Must be exactly 20 valid card IDs
+
+  Returns:
+  - 200: Deck updated successfully
+  - 400: Invalid input (must be exactly 20 valid card IDs)
+  - 401: Unauthorized
+  - 403: Forbidden (not deck owner)
+  - 404: Deck not found
+}

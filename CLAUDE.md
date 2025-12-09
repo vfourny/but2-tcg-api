@@ -103,7 +103,9 @@ The codebase follows a modular architecture with three main modules:
 
 - Real-time multiplayer game logic via Socket.io
 - `SocketHandler` class manages rooms, matchmaking, and game state
-- `GameService` class contains game logic (turn-based Pokemon card battles) and damage calculation utilities
+- `Game` entity contains game orchestration and player management (turn-based Pokemon card battles)
+- `Player` entity encapsulates player state and behavior
+- Game rules (type weakness, damage calculation) are in `game.rules.ts` utility functions
 - Weakness system: each Pokemon type has one primary weakness (2x damage multiplier)
 - Authentication via JWT tokens in socket handshake
 - Key concepts:
@@ -226,8 +228,9 @@ Required variables (see `.env.example`):
 
 1. The game runs entirely server-side to prevent cheating
 2. GameState is the single source of truth, stored in memory in SocketHandler
-3. Use `GameService.getGameStateForPlayer()` to format state for clients (hides opponent's hand/deck)
-4. Game logic and damage calculations are in `GameService`, socket event handling is in `SocketHandler`
+3. Use `Game.getStateForPlayer()` to format state for clients (hides opponent's hand/deck)
+4. `Game` entity orchestrates gameplay, `Player` entity handles player logic, game rules are in `game.rules.ts`, socket
+   event handling is in `SocketHandler`
 5. Weakness system: each type has one primary weakness with 2x damage multiplier
 6. Test with two separate socket connections (different browsers/tabs)
 7. See `GAME_SYSTEM.md` for complete event documentation and examples

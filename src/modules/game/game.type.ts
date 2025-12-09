@@ -1,26 +1,21 @@
-import { Card } from "../../generated/prisma/client";
-import type { GameService } from "./game.service";
+import type {Game} from "./game.class";
+import type {PlayerBoard} from "../player/player.type";
 
 /**
- * Carte dans le jeu avec son état
+ * Tour du joueur
  */
-export interface GameCard extends Card {
-    /** Points de vie actuels (peut être inférieur au HP max) */
-    currentHp: number;
+export enum TurnState {
+    HOST = 'host',
+    GUEST = 'guest',
 }
 
 /**
- * État du board d'un joueur
+ * Statut de la partie
  */
-export interface PlayerBoard {
-    /** Carte Pokemon active sur le board */
-    activeCard: GameCard | null;
-    /** Main du joueur (5 cartes max) */
-    hand: Card[];
-    /** Deck du joueur (cartes restantes à piocher) */
-    deck: Card[];
-    /** Score (nombre de Pokemons adverses vaincus) */
-    score: number;
+export enum GameStatus {
+    WAITING = 'waiting',
+    PLAYING = 'playing',
+    FINISHED = 'finished',
 }
 
 /**
@@ -30,17 +25,12 @@ export interface GameState {
     /** ID de la room */
     roomId: string;
     /** Board de l'hôte (host) */
-    host: PlayerBoard;
-    /** Board de l'invité (guest) */
-    guest: PlayerBoard;
-    /** ID du socket du joueur dont c'est le tour */
-    currentTurn: string;
-    /** ID du socket de l'hôte */
-    hostSocketId: string;
-    /** ID du socket de l'invité */
-    guestSocketId: string;
+    host: { board: PlayerBoard, socketId: string };
+    guest: { board: PlayerBoard, socketId: string };
+    /** Tour du joueur (HOST ou GUEST) */
+    currentTurn: TurnState;
     /** Statut de la partie */
-    status: 'waiting' | 'playing' | 'finished';
+    status: GameStatus;
     /** ID du gagnant (si la partie est terminée) */
     winner?: string;
 }
@@ -52,15 +42,10 @@ export interface Room {
     /** ID unique de la room */
     id: string;
     /** ID du socket de l'hôte */
-    hostSocketId: string;
-    /** ID du deck de l'hôte */
-    hostDeckId: string;
-    /** ID du socket de l'invité (null si pas encore rejoint) */
-    guestSocketId: string | null;
-    /** ID du deck de l'invité (null si pas encore rejoint) */
-    guestDeckId: string | null;
+    host: { socketId: string, deckId: string };
+    guest: { socketId: string | null, deckId: string | null };
     /** Instance du jeu (null tant que la partie n'a pas commencé) */
-    game: GameService | null;
+    game: Game | null;
 }
 
 /**

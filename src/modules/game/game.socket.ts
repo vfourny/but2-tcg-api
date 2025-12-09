@@ -2,7 +2,7 @@ import {Server, Socket} from "socket.io";
 import jwt from "jsonwebtoken";
 import {v4 as uuidv4} from "uuid";
 import {env, prisma} from "../../config";
-import {GameService} from "./game.service";
+import {Game} from "./game.class";
 import {AttackEvent, CreateRoomEvent, DrawCardsEvent, JoinRoomEvent, PlayCardEvent, Room,} from "./game.type";
 
 /**
@@ -105,10 +105,14 @@ export class SocketHandler {
             const roomId = uuidv4();
             const room: Room = {
                 id: roomId,
-                hostSocketId: socket.id,
-                hostDeckId: data.deckId,
-                guestSocketId: null,
-                guestDeckId: null,
+                host: {
+                    socketId: socket.id,
+                    deckId: data.deckId,
+                },
+                guest: {
+                    socketId: null,
+                    deckId: null,
+                },
                 game: null,
             };
 
@@ -142,7 +146,7 @@ export class SocketHandler {
                 return;
             }
 
-            if (room.guestSocketId !== null) {
+            if (room.guest.socketId !== null) {
                 socket.emit("error", {message: "La room est déjà pleine"});
                 return;
             }
@@ -175,7 +179,7 @@ export class SocketHandler {
             // Récupérer le deck de l'hôte
             const hostDeck = await prisma.deck.findFirst({
                 where: {
-                    id: room.hostDeckId,
+                    id: room.host.deckId,
                 },
                 include: {
                     cards: {
@@ -192,32 +196,32 @@ export class SocketHandler {
             }
 
             // Mettre à jour la room
-            room.guestSocketId = socket.id;
-            room.guestDeckId = data.deckId;
+            room.guest.socketId = socket.id;
+            room.guest.deckId = data.deckId;
 
             // Créer l'instance du jeu
             const hostCards = hostDeck.cards.map((dc) => dc.card);
             const guestCards = deck.cards.map((dc) => dc.card);
 
-            room.game = new GameService(
+            room.game = new Game(
                 data.roomId,
-                room.hostSocketId,
+                room.host.socketId,
                 hostCards,
-                room.guestSocketId,
+                room.guest.socketId,
                 guestCards
             );
 
             socket.join(data.roomId);
 
             // Notifier les deux joueurs que la partie commence
-            this.io.to(room.hostSocketId).emit("gameStarted", {
+            this.io.to(room.host.socketId).emit("gameStarted", {
                 message: "Un adversaire a rejoint ! La partie commence !",
-                gameState: room.game.getStateForPlayer(room.hostSocketId),
+                gameState: room.game.getStateForPlayer(room.host.socketId),
             });
 
-            this.io.to(room.guestSocketId).emit("gameStarted", {
+            this.io.to(room.guest.socketId).emit("gameStarted", {
                 message: "Vous avez rejoint la partie ! La partie commence !",
-                gameState: room.game.getStateForPlayer(room.guestSocketId),
+                gameState: room.game.getStateForPlayer(room.guest.socketId),
             });
 
             // Notifier tous les clients que la room n'est plus disponible
@@ -256,14 +260,14 @@ export class SocketHandler {
         }
 
         // Envoyer l'état mis à jour aux deux joueurs
-        this.io.to(room.hostSocketId).emit("gameStateUpdated", {
-            message: socket.id === room.hostSocketId ? result.message : "L'adversaire a pioché des cartes",
-            gameState: room.game.getStateForPlayer(room.hostSocketId),
+        this.io.to(room.host.socketId).emit("gameStateUpdated", {
+            message: socket.id === room.host.socketId ? result.message : "L'adversaire a pioché des cartes",
+            gameState: room.game.getStateForPlayer(room.host.socketId),
         });
 
-        this.io.to(room.guestSocketId!).emit("gameStateUpdated", {
-            message: socket.id === room.guestSocketId ? result.message : "L'adversaire a pioché des cartes",
-            gameState: room.game.getStateForPlayer(room.guestSocketId!),
+        this.io.to(room.guest.socketId!).emit("gameStateUpdated", {
+            message: socket.id === room.guest.socketId ? result.message : "L'adversaire a pioché des cartes",
+            gameState: room.game.getStateForPlayer(room.guest.socketId!),
         });
     }
 
@@ -286,14 +290,14 @@ export class SocketHandler {
         }
 
         // Envoyer l'état mis à jour aux deux joueurs
-        this.io.to(room.hostSocketId).emit("gameStateUpdated", {
-            message: socket.id === room.hostSocketId ? result.message : "L'adversaire a joué une carte",
-            gameState: room.game.getStateForPlayer(room.hostSocketId),
+        this.io.to(room.host.socketId).emit("gameStateUpdated", {
+            message: socket.id === room.host.socketId ? result.message : "L'adversaire a joué une carte",
+            gameState: room.game.getStateForPlayer(room.host.socketId),
         });
 
-        this.io.to(room.guestSocketId!).emit("gameStateUpdated", {
-            message: socket.id === room.guestSocketId ? result.message : "L'adversaire a joué une carte",
-            gameState: room.game.getStateForPlayer(room.guestSocketId!),
+        this.io.to(room.guest.socketId!).emit("gameStateUpdated", {
+            message: socket.id === room.guest.socketId ? result.message : "L'adversaire a joué une carte",
+            gameState: room.game.getStateForPlayer(room.guest.socketId!),
         });
     }
 
@@ -316,14 +320,14 @@ export class SocketHandler {
         }
 
         // Envoyer l'état mis à jour aux deux joueurs
-        this.io.to(room.hostSocketId).emit("gameStateUpdated", {
+        this.io.to(room.host.socketId).emit("gameStateUpdated", {
             message: result.message,
-            gameState: room.game.getStateForPlayer(room.hostSocketId),
+            gameState: room.game.getStateForPlayer(room.host.socketId),
         });
 
-        this.io.to(room.guestSocketId!).emit("gameStateUpdated", {
+        this.io.to(room.guest.socketId!).emit("gameStateUpdated", {
             message: result.message,
-            gameState: room.game.getStateForPlayer(room.guestSocketId!),
+            gameState: room.game.getStateForPlayer(room.guest.socketId!),
         });
 
         // Si la partie est terminée
@@ -349,14 +353,14 @@ export class SocketHandler {
 
         // Trouver et supprimer les rooms où le joueur était présent
         for (const [roomId, room] of this.rooms.entries()) {
-            if (room.hostSocketId === socket.id || room.guestSocketId === socket.id) {
+            if (room.host.socketId === socket.id || room.guest.socketId === socket.id) {
                 // Notifier l'autre joueur
-                if (room.guestSocketId && room.guestSocketId !== socket.id) {
-                    this.io.to(room.guestSocketId).emit("opponentDisconnected", {
+                if (room.guest.socketId && room.guest.socketId !== socket.id) {
+                    this.io.to(room.guest.socketId).emit("opponentDisconnected", {
                         message: "Votre adversaire s'est déconnecté. La partie est terminée.",
                     });
-                } else if (room.hostSocketId !== socket.id) {
-                    this.io.to(room.hostSocketId).emit("opponentDisconnected", {
+                } else if (room.host.socketId !== socket.id) {
+                    this.io.to(room.host.socketId).emit("opponentDisconnected", {
                         message: "Votre adversaire s'est déconnecté. La partie est terminée.",
                     });
                 }
@@ -374,10 +378,10 @@ export class SocketHandler {
         const availableRooms: Array<{ id: string; hostSocketId: string }> = [];
 
         for (const [roomId, room] of this.rooms.entries()) {
-            if (room.guestSocketId === null) {
+            if (room.guest.socketId === null) {
                 availableRooms.push({
                     id: roomId,
-                    hostSocketId: room.hostSocketId,
+                    hostSocketId: room.host.socketId,
                 });
             }
         }

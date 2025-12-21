@@ -2,13 +2,13 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {mockDeep, mockReset} from 'vitest-mock-extended';
 import {PrismaClient} from '../src/generated/prisma/client';
 import type {Request, Response} from 'express';
-import {prisma} from '../src/config/database';
-import {signIn, signUp} from '../src/modules/auth/auth.service';
+import {prisma} from '../src/database';
+import {signIn, signUp} from '../src/controllers/auth.controller';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 // Mock Prisma AVANT d'importer le service
-vi.mock('../src/config/database', () => ({
+vi.mock('../src/database', () => ({
     prisma: mockDeep<PrismaClient>(),
 }));
 
@@ -28,7 +28,7 @@ vi.mock('jsonwebtoken', () => ({
 }));
 
 // Mock env
-vi.mock('../src/config/env', () => ({
+vi.mock('../src/env', () => ({
     env: {
         JWT_SECRET: 'test-secret',
     },

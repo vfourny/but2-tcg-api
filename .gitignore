@@ -10,17 +10,15 @@ node_modules/
 .DS_Store
 .env
 *.log
+.cache/
 
 # Build
 build/
 dist/
-
-# Documentation
-docs/
 
 # Test
 coverage/
 
 # Database
 generated
-*.db
+prisma/data/

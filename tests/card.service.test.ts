@@ -4,12 +4,12 @@ import { PrismaClient, PokemonType } from '../src/generated/prisma/client';
 import type { Request, Response } from 'express';
 
 // Mock Prisma AVANT d'importer le service
-vi.mock('../src/config/database', () => ({
+vi.mock('../src/database', () => ({
   prisma: mockDeep<PrismaClient>(),
 }));
 
-import { prisma } from '../src/config/database';
-import { listCards } from '../src/modules/card/card.service';
+import { prisma } from '../src/database';
+import { listCards } from '../src/controllers/card.controller';
 
 const prismaMock = prisma as unknown as ReturnType<typeof mockDeep<PrismaClient>>;
 

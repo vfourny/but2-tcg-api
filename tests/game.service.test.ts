@@ -1,9 +1,48 @@
 import {beforeEach, describe, expect, it} from 'vitest';
 import type {Card} from '../src/generated/prisma/client';
 import {PokemonType} from '../src/generated/prisma/client';
-import {Game} from '../src/modules/game/game.class';
-import {Player} from '../src/modules/player/player.class';
-import {GameStatus, TurnState} from '../src/modules/game/game.type';
+import {Game} from '../src/classes/game.class';
+import {Player} from '../src/classes/player.class';
+import {GameStatus, TurnState} from '../src/types/game.type';
+
+/**
+ * Helper pour créer une partie complète avec deux joueurs
+ */
+function createGame(roomId: string, hostSocketId: string, hostDeck: Card[], guestSocketId: string, guestDeck: Card[]): Game {
+    const game = new Game(roomId, hostSocketId, 'host-user-id', 'host-deck-id');
+    game.startWithGuest(guestSocketId, 'guest-user-id', 'guest-deck-id', hostDeck, guestDeck);
+    return game;
+}
+
+/**
+ * Helper pour extraire le statut d'un batch d'événements
+ * Retourne {success: true} si pas d'erreur, {success: false, message: ...} sinon
+ */
+function extractResult(batch: any): {
+    success: boolean;
+    message?: string;
+    cardDefeated?: boolean;
+    gameWon?: boolean;
+} {
+    const errorEvent = batch.events.find((e: any) => e.type === 'error');
+    if (errorEvent) {
+        return {success: false, message: errorEvent.data.message};
+    }
+
+    const stateUpdateEvent = batch.events.find((e: any) => e.type === 'gameStateUpdated');
+    const gameEndedEvent = batch.events.find((e: any) => e.type === 'gameEnded');
+
+    const message = stateUpdateEvent?.data?.message || gameEndedEvent?.data?.message;
+    const cardDefeated = message?.includes('K.O.') || false;
+    const gameWon = gameEndedEvent !== undefined;
+
+    return {
+        success: true,
+        message,
+        cardDefeated,
+        gameWon
+    };
+}
 
 describe('Game Service', () => {
     const mockCards: Card[] = [
@@ -50,7 +89,7 @@ describe('Game Service', () => {
                 id: `card-p2-${i}`,
             }));
 
-            const game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            const game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
 
             expect(game.getState().roomId).toBe('room-123');
             expect(game.getState().host.socketId).toBe('socket-1');
@@ -75,7 +114,7 @@ describe('Game Service', () => {
             }));
             const deck2 = [...deck1];
 
-            const game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            const game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
 
             // Test que les decks ont bien 20 cartes
             expect(game.getState().host.board.deck).toHaveLength(20);
@@ -100,11 +139,12 @@ describe('Game Service', () => {
                 id: `card-${i}`,
             }));
 
-            game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
         });
 
         it('should draw cards until hand has 5 cards', () => {
-            const result = game.drawCards('socket-1');
+            const batch = game.drawCards('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(game.getState().host.board.hand).toHaveLength(5);
@@ -115,7 +155,8 @@ describe('Game Service', () => {
             // Vider presque tout le deck
             game.getHostPlayer().setDeck([mockCards[0], mockCards[1]]);
 
-            const result = game.drawCards('socket-1');
+            const batch = game.drawCards('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(game.getState().host.board.hand).toHaveLength(2);
@@ -128,7 +169,8 @@ describe('Game Service', () => {
             const deckCountBefore = game.getState().host.board.deck.length;
 
             // Essayer de piocher à nouveau
-            const result = game.drawCards('socket-1');
+            const batch = game.drawCards('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(game.getState().host.board.hand).toHaveLength(5);
@@ -136,7 +178,8 @@ describe('Game Service', () => {
         });
 
         it('should return error for invalid player', () => {
-            const result = game.drawCards('invalid-socket-id');
+            const batch = game.drawCards('invalid-socket-id');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe('Joueur non trouvé');
@@ -145,7 +188,8 @@ describe('Game Service', () => {
         it('should not draw from empty deck', () => {
             game.getHostPlayer().setDeck([]);
 
-            const result = game.drawCards('socket-1');
+            const batch = game.drawCards('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(game.getState().host.board.hand).toHaveLength(0);
@@ -165,14 +209,15 @@ describe('Game Service', () => {
                 id: `card-p2-${i}`,
             }));
 
-            game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
             game.drawCards('socket-1');
             game.drawCards('socket-2');
         });
 
         it('should play card from hand to board', () => {
             const cardToPlay = game.getState().host.board.hand[0];
-            const result = game.playCard('socket-1', 0);
+            const batch = game.playCard('socket-1', 0);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(result.message).toContain('a été placé sur le board');
@@ -183,21 +228,24 @@ describe('Game Service', () => {
         });
 
         it('should return error if not player turn', () => {
-            const result = game.playCard('socket-2', 0);
+            const batch = game.playCard('socket-2', 0);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe("Ce n'est pas votre tour");
         });
 
         it('should return error if invalid card index', () => {
-            const result = game.playCard('socket-1', 10);
+            const batch = game.playCard('socket-1', 10);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe('Index de carte invalide');
         });
 
         it('should return error if negative card index', () => {
-            const result = game.playCard('socket-1', -1);
+            const batch = game.playCard('socket-1', -1);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe('Index de carte invalide');
@@ -205,7 +253,8 @@ describe('Game Service', () => {
 
         it('should return error if card already on board', () => {
             game.playCard('socket-1', 0);
-            const result = game.playCard('socket-1', 0);
+            const batch = game.playCard('socket-1', 0);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe('Vous avez déjà une carte active sur le board');
@@ -213,7 +262,8 @@ describe('Game Service', () => {
 
         it('should return error for invalid player', () => {
             // Un joueur invalide ne peut pas avoir le tour, donc on vérifie d'abord le tour
-            const result = game.playCard('invalid-socket-id', 0);
+            const batch = game.playCard('invalid-socket-id', 0);
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             // Le code vérifie maintenant d'abord si le joueur existe
@@ -275,7 +325,7 @@ describe('Game Service', () => {
                     },
                 ];
 
-                const game = new Game('room-1', 'socket-1', deck1, 'socket-2', deck2);
+                const game = createGame('room-1', 'socket-1', deck1, 'socket-2', deck2);
 
                 // Les deux joueurs piochent et jouent leurs cartes
                 game.drawCards('socket-1');
@@ -288,7 +338,8 @@ describe('Game Service', () => {
                 const initialHp = game.getState().guest.board.activeCard!.currentHp;
 
                 // Attaque avec le type super efficace
-                const result = game.attack('socket-1');
+                const batch = game.attack('socket-1');
+                const result = extractResult(batch);
 
                 expect(result.success).toBe(true);
                 // Dégâts = (50 - 30) * 2 = 40
@@ -331,7 +382,7 @@ describe('Game Service', () => {
                     },
                 ];
 
-                const game = new Game('room-1', 'socket-1', deck1, 'socket-2', deck2);
+                const game = createGame('room-1', 'socket-1', deck1, 'socket-2', deck2);
 
                 game.drawCards('socket-1');
                 game.drawCards('socket-2');
@@ -342,7 +393,8 @@ describe('Game Service', () => {
 
                 const initialHp = game.getState().guest.board.activeCard!.currentHp;
 
-                const result = game.attack('socket-1');
+                const batch = game.attack('socket-1');
+                const result = extractResult(batch);
 
                 expect(result.success).toBe(true);
                 // Dégâts = (50 - 30) * 1 = 20
@@ -364,7 +416,7 @@ describe('Game Service', () => {
                 id: `card-p2-${i}`,
             }));
 
-            game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
             game.drawCards('socket-1');
             game.drawCards('socket-2');
             game.playCard('socket-1', 0);
@@ -378,7 +430,8 @@ describe('Game Service', () => {
             // Host attaque
             game.setCurrentTurn(TurnState.HOST);
             const initialHp = game.getState().guest.board.activeCard!.currentHp;
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(result.message).toContain('attaque');
@@ -397,7 +450,8 @@ describe('Game Service', () => {
 
             // Host attaque
             game.setCurrentTurn(TurnState.HOST);
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(result.cardDefeated).toBe(true);
@@ -417,7 +471,8 @@ describe('Game Service', () => {
 
             // Host attaque pour gagner
             game.setCurrentTurn(TurnState.HOST);
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(result.cardDefeated).toBe(true);
@@ -438,7 +493,8 @@ describe('Game Service', () => {
             game.setCurrentTurn(TurnState.HOST);
 
             const initialHp = game.getState().guest.board.activeCard!.currentHp;
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
             expect(game.getState().guest.board.activeCard!.currentHp).toBe(initialHp - 1);
@@ -452,7 +508,8 @@ describe('Game Service', () => {
             game.setCurrentTurn(TurnState.HOST);
 
             // Guest essaie d'attaquer alors que ce n'est pas son tour
-            const result = game.attack('socket-2');
+            const batch = game.attack('socket-2');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe("Ce n'est pas votre tour");
@@ -461,14 +518,16 @@ describe('Game Service', () => {
         it('should return error if attacker has no active card', () => {
             game.getHostPlayer().setActiveCard(null);
 
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe("Vous n'avez pas de carte active pour attaquer");
         });
 
         it('should return error if defender has no active card', () => {
-            const result = game.attack('socket-1');
+            const batch = game.attack('socket-1');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
             expect(result.message).toBe("L'adversaire n'a pas de carte active à attaquer");
@@ -479,7 +538,8 @@ describe('Game Service', () => {
             game.playCard('socket-2', 0);
             game.setCurrentTurn('invalid' as any);
 
-            const result = game.attack('invalid-socket-id');
+            const batch = game.attack('invalid-socket-id');
+            const result = extractResult(batch);
 
             expect(result.success).toBe(false);
         });
@@ -498,7 +558,7 @@ describe('Game Service', () => {
                 id: `card-p2-${i}`,
             }));
 
-            game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
             game.drawCards('socket-1');
             game.drawCards('socket-2');
         });
@@ -579,7 +639,7 @@ describe('Game Service', () => {
                 id: `card-p2-${i}`,
             }));
 
-            game = new Game('room-123', 'socket-1', deck1, 'socket-2', deck2);
+            game = createGame('room-123', 'socket-1', deck1, 'socket-2', deck2);
             hostPlayer = game.getHostPlayer();
             guestPlayer = game.getGuestPlayer();
         });
@@ -614,7 +674,8 @@ describe('Game Service', () => {
             guestPlayer.playCard(0);
             game.setCurrentTurn(TurnState.HOST);
 
-            const result = game.attack(hostPlayer.getSocketId());
+            const batch = game.attack(hostPlayer.getSocketId());
+            const result = extractResult(batch);
 
             expect(result.success).toBe(true);
         });

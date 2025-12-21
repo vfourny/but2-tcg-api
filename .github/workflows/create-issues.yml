@@ -1,0 +1,59 @@
+name: Seed TP issues
+
+on:
+  workflow_dispatch:
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Create issues (no duplicates)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Charger les issues depuis le fichier JSON
+            const issues = JSON.parse(
+              fs.readFileSync('.github/seeds/issues.json', 'utf8')
+            );
+            
+            // Récupérer toutes les issues existantes
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              per_page: 100
+            });
+            
+            // Extraire les titres des issues existantes
+            const existingTitles = new Set(existingIssues.data.map(issue => issue.title));
+            
+            let createdCount = 0;
+            let skippedCount = 0;
+            
+            // Créer les issues qui n'existent pas
+            for (const issue of issues) {
+              if (existingTitles.has(issue.title)) {
+                console.log(`⏭️  Issue skipped (already exists): "${issue.title}"`);
+                skippedCount++;
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issue.title,
+                  body: issue.body,
+                  labels: issue.labels || []
+                });
+                console.log(`✅ Issue created: "${issue.title}"`);
+                createdCount++;
+              }
+            }
+            
+            console.log(`\n📊 Summary: ${createdCount} created, ${skippedCount} skipped`);

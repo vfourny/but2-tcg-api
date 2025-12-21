@@ -9,13 +9,13 @@ vi.mock('jsonwebtoken', () => ({
 }));
 
 // Mock env
-vi.mock('../src/config/env', () => ({
+vi.mock('../src/env', () => ({
   env: {
     JWT_SECRET: 'test-secret',
   },
 }));
 
-import { authenticateToken } from '../src/modules/auth/auth.middleware';
+import { authenticateToken } from '../src/middlewares/auth.middleware';
 import jwt from 'jsonwebtoken';
 
 describe('Auth Middleware', () => {

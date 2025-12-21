@@ -1,0 +1,129 @@
+openapi: 3.0.0
+info:
+  title: Pokemon TCG API
+  version: 1.0.0
+  description: |
+    Trading Card Game (TCG) backend server built with Express, TypeScript, and Prisma.
+    Provides REST APIs for user authentication, card management, and deck building, plus real-time multiplayer game functionality via WebSockets.
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3001
+    description: Development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        **Test Credentials:**
+        - Email: `red@example.com` or `blue@example.com`
+        - Password: `password123`
+
+        **Quick Start:**
+        1. Call POST /api/auth/sign-in with test credentials
+        2. Copy the token from the response
+        3. Click "Authorize" and paste the token
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Bad Request
+        message:
+          type: string
+          example: Validation error message
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        email:
+          type: string
+          format: email
+          example: "red@example.com"
+        username:
+          type: string
+          example: "red"
+
+    Card:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        pokedexNumber:
+          type: integer
+          example: 25
+        name:
+          type: string
+          example: "Pikachu"
+        type:
+          type: string
+          enum: [Normal, Fire, Water, Electric, Grass, Ice, Fighting, Poison, Ground, Flying, Psychic, Bug, Rock, Ghost, Dragon, Dark, Steel, Fairy]
+          example: "Electric"
+        hp:
+          type: integer
+          example: 60
+        attack:
+          type: integer
+          example: 55
+        defense:
+          type: integer
+          example: 40
+        imageUrl:
+          type: string
+          example: "https://assets.pokemon.com/assets/cms2/img/pokedex/full/025.png"
+
+    Deck:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "My Starter Deck"
+        userId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        cards:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              deckId:
+                type: string
+                format: uuid
+              cardId:
+                type: string
+                format: uuid
+              card:
+                $ref: '#/components/schemas/Card'
+
+tags:
+  - name: Auth
+    description: Authentication endpoints for user registration and login
+  - name: Cards
+    description: Pokemon card catalog management
+  - name: Decks
+    description: User deck building and management

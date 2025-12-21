@@ -1,0 +1,19 @@
+[
+  {
+    "title": "TP01 – Initialisation du projet",
+    "body": "Objectif : mettre en place le projet\n\n- [ ] Node installé\n- [ ] Repo initialisé",
+    "labels": [
+      "tp",
+      "setup"
+    ],
+    "assignees": []
+  },
+  {
+    "title": "TP02 – API Express",
+    "body": "Créer les routes CRUD pour les ressources.",
+    "labels": [
+      "tp",
+      "api"
+    ]
+  }
+]

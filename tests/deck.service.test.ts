@@ -2,11 +2,11 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {mockDeep, mockReset} from 'vitest-mock-extended';
 import {PrismaClient} from '../src/generated/prisma/client';
 import type {Request, Response} from 'express';
-import {prisma} from '../src/config';
-import {createDeck, deleteDeck, getDeckById, getUserDecks, updateDeck} from '../src/modules/deck/deck.service';
+import {prisma} from '../src/database';
+import {createDeck, deleteDeck, getDeckById, getUserDecks, updateDeck} from '../src/controllers/deck.controller';
 
 // Mock Prisma AVANT d'importer le service
-vi.mock('../src/config', () => ({
+vi.mock('../src/database', () => ({
     prisma: mockDeep<PrismaClient>(),
 }));
 

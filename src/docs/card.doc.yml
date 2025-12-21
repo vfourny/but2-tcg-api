@@ -1,0 +1,59 @@
+paths:
+  /api/cards:
+    get:
+      tags:
+        - Cards
+      summary: Get all Pokemon cards
+      description: Retrieve the complete catalog of Pokemon cards, sorted by Pokedex number. Requires authentication.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of all cards retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Card'
+              example:
+                - id: "550e8400-e29b-41d4-a716-446655440001"
+                  pokedexNumber: 1
+                  name: "Bulbasaur"
+                  type: "Grass"
+                  hp: 45
+                  attack: 49
+                  defense: 49
+                  imageUrl: "https://assets.pokemon.com/assets/cms2/img/pokedex/full/001.png"
+                - id: "550e8400-e29b-41d4-a716-446655440025"
+                  pokedexNumber: 25
+                  name: "Pikachu"
+                  type: "Electric"
+                  hp: 35
+                  attack: 55
+                  defense: 40
+                  imageUrl: "https://assets.pokemon.com/assets/cms2/img/pokedex/full/025.png"
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Unauthorized"
+                message: "No token provided"
+        '403':
+          description: Forbidden - Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Forbidden"
+                message: "Invalid or expired token"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

@@ -5,6 +5,7 @@ import {calculateDamage} from "../utils/rules.util";
 /**
  * Représente un joueur dans une partie
  * Contient l'état du joueur (main, deck, carte active, score) et la logique métier
+ * Pure classe métier sans couplage à Socket.io
  */
 export class Player {
     private hand: Card[] = [];
@@ -12,10 +13,7 @@ export class Player {
     private activeCard: GameCard | null = null;
     private score: 0 | 1 | 2 | 3 = 0;
 
-    constructor(
-        private readonly socketId: string,
-        deck: Card[]
-    ) {
+    constructor(deck: Card[]) {
         // Mélanger le deck
         this.deck = [...deck].sort(() => Math.random() - 0.5);
     }
@@ -155,13 +153,6 @@ export class Player {
             deckCount: this.deck.length,
             score: this.score,
         };
-    }
-
-    /**
-     * Retourne l'ID du socket de ce joueur
-     */
-    public getSocketId(): string {
-        return this.socketId;
     }
 
     /**

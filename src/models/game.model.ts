@@ -1,359 +1,122 @@
 import type {Card} from "../generated/prisma/client";
-import {GameStatus, TurnState} from "../types/game.type";
+import {GameStatus} from "../types/game.type";
 import {Player} from "./player.model";
-import {
-    createErrorEvent,
-    createGameEndedEvent,
-    createStateUpdateEvent,
-    GameEventBatch
-} from "../utils/game.events";
 
 /**
- * Représente une partie de jeu
- * Gère à la fois le matchmaking (WAITING) et la partie en cours (PLAYING/FINISHED)
+ * Résultat d'une action de jeu
+ */
+export interface GameActionResult {
+    success: boolean;
+    message: string;
+    notifyOpponent?: string;
+    gameEnded?: boolean;
+    winner?: string;
+}
+
+/**
+ * Représente une partie de jeu en cours
+ * TOUJOURS 2 joueurs, jamais null (matchmaking géré par Lobby)
  */
 export class Game {
     private readonly id: string;
-
-    // Métadonnées des joueurs (pour matchmaking et Socket.io)
-    private readonly host: {
-        socketId: string;
-        userId: string;
-        deckId: string;
-    };
-
-    private guest: {
-        socketId: string | null;
-        userId: string | null;
-        deckId: string | null;
-    } = {
-        socketId: null,
-        userId: null,
-        deckId: null,
-    };
-
-    // Instances Player (null tant que la partie n'a pas commencé)
-    private hostPlayer: Player | null = null;
-    private guestPlayer: Player | null = null;
-
-    // État du jeu
-    private currentTurn: TurnState = TurnState.HOST;
-    private status: GameStatus = GameStatus.WAITING;
+    private readonly players: Map<string, Player>; // socketId -> Player
+    private readonly socketIds: [string, string]; // [host, guest]
+    private currentPlayer: Player;
+    private status: GameStatus = GameStatus.PLAYING;
     private winner?: string;
 
     constructor(
         id: string,
         hostSocketId: string,
-        hostUserId: string,
-        hostDeckId: string
+        hostDeck: Card[],
+        guestSocketId: string,
+        guestDeck: Card[]
     ) {
         this.id = id;
-        this.host = {
-            socketId: hostSocketId,
-            userId: hostUserId,
-            deckId: hostDeckId,
-        };
+        this.socketIds = [hostSocketId, guestSocketId];
+
+        const hostPlayer = new Player(hostDeck);
+        const guestPlayer = new Player(guestDeck);
+
+        this.players = new Map([
+            [hostSocketId, hostPlayer],
+            [guestSocketId, guestPlayer],
+        ]);
+
+        // Host commence toujours
+        this.currentPlayer = hostPlayer;
     }
-
-    //
-    // Matchmaking
-    //
-
-    /**
-     * Vérifier si la partie est en attente d'un adversaire
-     */
-    public isWaiting(): boolean {
-        return this.status === GameStatus.WAITING;
-    }
-
-    /**
-     * Vérifier si la partie est complète (2 joueurs)
-     */
-    public isFull(): boolean {
-        return this.guest.socketId !== null;
-    }
-
-    /**
-     * Démarrer la partie avec un guest
-     */
-    public startWithGuest(
-        guestSocketId: string,
-        guestUserId: string,
-        guestDeckId: string,
-        hostDeck: Card[],
-        guestDeck: Card[]
-    ): { success: boolean; message: string } {
-        if (!this.isWaiting()) {
-            return {success: false, message: "Game already started"};
-        }
-
-        if (this.isFull()) {
-            return {success: false, message: "Game is full"};
-        }
-
-        // Mettre à jour les infos du guest
-        this.guest = {
-            socketId: guestSocketId,
-            userId: guestUserId,
-            deckId: guestDeckId,
-        };
-
-        // Créer les joueurs
-        this.hostPlayer = new Player(this.host.socketId, hostDeck);
-        this.guestPlayer = new Player(guestSocketId, guestDeck);
-
-        // Changer le statut
-        this.status = GameStatus.PLAYING;
-
-        return {success: true, message: "Game started"};
-    }
-
-    //
-    // Helpers pour Socket.io
-    //
-
-    /**
-     * Récupérer l'ID de la partie
-     */
-    public getId(): string {
-        return this.id;
-    }
-
-    /**
-     * Récupérer les socketIds pour envoyer des événements
-     */
-    public getSocketIds(): { host: string; guest: string | null } {
-        return {
-            host: this.host.socketId,
-            guest: this.guest.socketId,
-        };
-    }
-
-    /**
-     * Récupérer le deckId du host
-     */
-    public getHostDeckId(): string {
-        return this.host.deckId;
-    }
-
-    /**
-     * Récupérer le deckId du guest
-     */
-    public getGuestDeckId(): string | null {
-        return this.guest.deckId;
-    }
-
-    /**
-     * Vérifier si un socketId appartient à cette partie
-     */
-    public hasPlayer(socketId: string): boolean {
-        return (
-            this.host.socketId === socketId || this.guest.socketId === socketId
-        );
-    }
-
-    /**
-     * Vérifier si le socketId est celui de l'hôte
-     */
-    public isHost(socketId: string): boolean {
-        return this.host.socketId === socketId;
-    }
-
-    //
-    // Logique de jeu avec événements structurés
-    //
 
     /**
      * Pioche des cartes jusqu'à remplir la main (5 cartes max)
      */
-    public drawCards(playerSocketId: string): GameEventBatch {
-        if (this.status !== GameStatus.PLAYING) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        "Game not started"
-                    ),
-                ],
-            };
-        }
-
-        const player = this.getPlayer(playerSocketId);
+    public drawCards(socketId: string): GameActionResult {
+        const player = this.players.get(socketId);
 
         if (!player) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        "Joueur non trouvé"
-                    ),
-                ],
-            };
+            return {success: false, message: "Joueur non trouvé"};
+        }
+
+        if (player !== this.currentPlayer) {
+            return {success: false, message: "Ce n'est pas votre tour"};
         }
 
         const result = player.drawCards();
 
-        if (!result.success) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        result.message
-                    ),
-                ],
-            };
-        }
-
-        // Créer les événements pour les deux joueurs
-        const isHostPlayer = this.isHost(playerSocketId);
         return {
-            events: [
-                createStateUpdateEvent(
-                    "host",
-                    isHostPlayer ? result.message : "L'adversaire a pioché des cartes",
-                    this.getStateForPlayer(this.host.socketId)
-                ),
-                createStateUpdateEvent(
-                    "guest",
-                    !isHostPlayer
-                        ? result.message
-                        : "L'adversaire a pioché des cartes",
-                    this.getStateForPlayer(this.guest.socketId!)
-                ),
-            ],
+            success: true,
+            message: result.message,
+            notifyOpponent: "L'adversaire a pioché des cartes",
         };
     }
 
     /**
      * Joue une carte de la main sur le board
      */
-    public playCard(
-        playerSocketId: string,
-        cardIndex: number
-    ): GameEventBatch {
-        if (this.status !== GameStatus.PLAYING) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        "Game not started"
-                    ),
-                ],
-            };
-        }
-
-        const player = this.getPlayer(playerSocketId);
+    public playCard(socketId: string, cardIndex: number): GameActionResult {
+        const player = this.players.get(socketId);
 
         if (!player) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        "Joueur non trouvé"
-                    ),
-                ],
-            };
+            return {success: false, message: "Joueur non trouvé"};
         }
 
-        // Vérifier que c'est le tour du joueur
-        const playerTurn = this.getPlayerTurn(playerSocketId);
-        if (this.currentTurn !== playerTurn) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        "Ce n'est pas votre tour"
-                    ),
-                ],
-            };
+        if (player !== this.currentPlayer) {
+            return {success: false, message: "Ce n'est pas votre tour"};
         }
 
         const result = player.playCard(cardIndex);
 
         if (!result.success) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(playerSocketId) ? "host" : "guest",
-                        result.message
-                    ),
-                ],
-            };
+            return {success: false, message: result.message};
         }
 
-        // Créer les événements pour les deux joueurs
-        const isHostPlayer = this.isHost(playerSocketId);
         return {
-            events: [
-                createStateUpdateEvent(
-                    "host",
-                    isHostPlayer ? result.message : "L'adversaire a joué une carte",
-                    this.getStateForPlayer(this.host.socketId)
-                ),
-                createStateUpdateEvent(
-                    "guest",
-                    !isHostPlayer
-                        ? result.message
-                        : "L'adversaire a joué une carte",
-                    this.getStateForPlayer(this.guest.socketId!)
-                ),
-            ],
+            success: true,
+            message: result.message,
+            notifyOpponent: "L'adversaire a joué une carte",
         };
     }
 
     /**
      * Attaque le Pokemon adverse
      */
-    public attack(attackerSocketId: string): GameEventBatch {
-        if (this.status !== GameStatus.PLAYING) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(attackerSocketId) ? "host" : "guest",
-                        "Game not started"
-                    ),
-                ],
-            };
-        }
-
-        const attacker = this.getPlayer(attackerSocketId);
-        const defender = this.getOpponent(attackerSocketId);
+    public attack(attackerSocketId: string): GameActionResult {
+        const attacker = this.players.get(attackerSocketId);
+        const defenderSocketId = this.getOpponentSocketId(attackerSocketId);
+        const defender = defenderSocketId ? this.players.get(defenderSocketId) : null;
 
         if (!attacker || !defender) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(attackerSocketId) ? "host" : "guest",
-                        "Erreur lors de la récupération des joueurs"
-                    ),
-                ],
-            };
+            return {success: false, message: "Erreur lors de la récupération des joueurs"};
         }
 
-        // Vérifier que c'est le tour du joueur
-        const playerTurn = this.getPlayerTurn(attackerSocketId);
-        if (this.currentTurn !== playerTurn) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(attackerSocketId) ? "host" : "guest",
-                        "Ce n'est pas votre tour"
-                    ),
-                ],
-            };
+        if (attacker !== this.currentPlayer) {
+            return {success: false, message: "Ce n'est pas votre tour"};
         }
 
         const result = attacker.attack(defender);
 
         if (!result.success) {
-            return {
-                events: [
-                    createErrorEvent(
-                        this.isHost(attackerSocketId) ? "host" : "guest",
-                        result.message
-                    ),
-                ],
-            };
+            return {success: false, message: result.message};
         }
 
         // Si l'attaque a réussi et que la partie n'est pas gagnée, changer de tour
@@ -361,47 +124,25 @@ export class Game {
             this.switchTurn();
         }
 
-        // Si la partie est gagnée, mettre à jour le statut
+        // Si la partie est gagnée
         if (result.gameWon) {
             this.status = GameStatus.FINISHED;
             this.winner = attackerSocketId;
 
             return {
-                events: [
-                    createStateUpdateEvent(
-                        "host",
-                        result.message,
-                        this.getStateForPlayer(this.host.socketId)
-                    ),
-                    createStateUpdateEvent(
-                        "guest",
-                        result.message,
-                        this.getStateForPlayer(this.guest.socketId!)
-                    ),
-                    createGameEndedEvent(
-                        attackerSocketId,
-                        this.winner === attackerSocketId
-                            ? "Vous avez gagné !"
-                            : "Vous avez perdu !"
-                    ),
-                ],
+                success: true,
+                message: result.message,
+                notifyOpponent: result.message,
+                gameEnded: true,
+                winner: attackerSocketId,
             };
         }
 
         // Partie continue
         return {
-            events: [
-                createStateUpdateEvent(
-                    "host",
-                    result.message,
-                    this.getStateForPlayer(this.host.socketId)
-                ),
-                createStateUpdateEvent(
-                    "guest",
-                    result.message,
-                    this.getStateForPlayer(this.guest.socketId!)
-                ),
-            ],
+            success: true,
+            message: result.message,
+            notifyOpponent: result.message,
         };
     }
 
@@ -409,25 +150,32 @@ export class Game {
      * Formate l'état du jeu pour un joueur spécifique
      * (cache la main et le deck de l'adversaire)
      */
-    public getStateForPlayer(playerSocketId: string): any {
-        const player = this.getPlayer(playerSocketId);
-        const opponent = this.getOpponent(playerSocketId);
+    public getStateForPlayer(socketId: string): any {
+        const player = this.players.get(socketId);
+        const opponentSocketId = this.getOpponentSocketId(socketId);
+        const opponent = opponentSocketId ? this.players.get(opponentSocketId) : null;
 
         if (!player || !opponent) {
             return null;
         }
 
-        const playerTurn = this.getPlayerTurn(playerSocketId);
+        const isYourTurn = player === this.currentPlayer;
 
         return {
             roomId: this.id,
             status: this.status,
             winner: this.winner,
-            currentTurn: this.currentTurn,
-            isYourTurn: this.currentTurn === playerTurn,
+            isYourTurn,
             yourBoard: player.getOwnState(),
             opponentBoard: opponent.getOpponentState(),
         };
+    }
+
+    /**
+     * Retourne l'ID de la partie
+     */
+    public getId(): string {
+        return this.id;
     }
 
     /**
@@ -445,62 +193,74 @@ export class Game {
     }
 
     /**
-     * Retourne l'état interne du jeu (pour les tests)
-     * @internal
+     * Vérifie si un socketId appartient à cette partie
      */
-    public getState() {
+    public hasPlayer(socketId: string): boolean {
+        return this.players.has(socketId);
+    }
+
+    /**
+     * Retourne les socketIds des deux joueurs
+     */
+    public getSocketIds(): { host: string; guest: string } {
         return {
-            roomId: this.id,
-            host: {
-                socketId: this.hostPlayer?.getSocketId() || this.host.socketId,
-                board: this.hostPlayer?.getBoard() || null,
-            },
-            guest: {
-                socketId: this.guestPlayer?.getSocketId() || this.guest.socketId,
-                board: this.guestPlayer?.getBoard() || null,
-            },
-            currentTurn: this.currentTurn,
-            status: this.status,
-            winner: this.winner,
+            host: this.socketIds[0],
+            guest: this.socketIds[1],
         };
     }
 
     /**
-     * Récupère une instance Player pour le joueur host
+     * Retourne le socketId de l'adversaire
      */
-    public getHostPlayer(): Player | null {
-        return this.hostPlayer;
-    }
-
-    /**
-     * Récupère une instance Player pour le joueur guest
-     */
-    public getGuestPlayer(): Player | null {
-        return this.guestPlayer;
-    }
-
-    /**
-     * Récupère une instance Player par son socketId
-     */
-    public getPlayer(socketId: string): Player | null {
-        if (!this.hostPlayer || !this.guestPlayer) {
-            return null;
-        }
-
-        if (socketId === this.hostPlayer.getSocketId()) {
-            return this.hostPlayer;
-        } else if (socketId === this.guestPlayer.getSocketId()) {
-            return this.guestPlayer;
+    private getOpponentSocketId(socketId: string): string | null {
+        if (socketId === this.socketIds[0]) {
+            return this.socketIds[1];
+        } else if (socketId === this.socketIds[1]) {
+            return this.socketIds[0];
         }
         return null;
     }
 
     /**
-     * Définit le tour manuellement (pour les tests)
+     * Change le tour au joueur suivant
+     */
+    private switchTurn(): void {
+        const currentSocketId = [...this.players.entries()].find(
+            ([_, player]) => player === this.currentPlayer
+        )?.[0];
+
+        if (currentSocketId) {
+            const opponentSocketId = this.getOpponentSocketId(currentSocketId);
+            if (opponentSocketId) {
+                const opponent = this.players.get(opponentSocketId);
+                if (opponent) {
+                    this.currentPlayer = opponent;
+                }
+            }
+        }
+    }
+
+    /**
+     * Retourne l'état interne du jeu (pour les tests)
      * @internal
      */
-    public setCurrentTurn(turn: TurnState): void {
-        this.currentTurn = turn;
+    public getState() {
+        const hostPlayer = this.players.get(this.socketIds[0]);
+        const guestPlayer = this.players.get(this.socketIds[1]);
+
+        return {
+            roomId: this.id,
+            host: {
+                socketId: this.socketIds[0],
+                board: hostPlayer?.getBoard() || null,
+            },
+            guest: {
+                socketId: this.socketIds[1],
+                board: guestPlayer?.getBoard() || null,
+            },
+            status: this.status,
+            winner: this.winner,
+        };
     }
 
     /**
@@ -517,45 +277,5 @@ export class Game {
      */
     public setWinner(winner: string): void {
         this.winner = winner;
-    }
-
-    /**
-     * Récupère l'adversaire d'un joueur
-     */
-    private getOpponent(playerSocketId: string): Player | null {
-        if (!this.hostPlayer || !this.guestPlayer) {
-            return null;
-        }
-
-        if (playerSocketId === this.hostPlayer.getSocketId()) {
-            return this.guestPlayer;
-        } else if (playerSocketId === this.guestPlayer.getSocketId()) {
-            return this.hostPlayer;
-        }
-        return null;
-    }
-
-    /**
-     * Retourne le TurnState d'un joueur
-     */
-    private getPlayerTurn(playerSocketId: string): TurnState | null {
-        if (!this.hostPlayer || !this.guestPlayer) {
-            return null;
-        }
-
-        if (playerSocketId === this.hostPlayer.getSocketId()) {
-            return TurnState.HOST;
-        } else if (playerSocketId === this.guestPlayer.getSocketId()) {
-            return TurnState.GUEST;
-        }
-        return null;
-    }
-
-    /**
-     * Change le tour au joueur suivant
-     */
-    private switchTurn(): void {
-        this.currentTurn =
-            this.currentTurn === TurnState.HOST ? TurnState.GUEST : TurnState.HOST;
     }
 }

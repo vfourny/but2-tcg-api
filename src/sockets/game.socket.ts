@@ -5,8 +5,8 @@ import {v4 as uuidv4} from "uuid";
 import {env} from "../env";
 import {prisma} from "../database";
 import {Game} from "../models/game.model";
+import {Lobby} from "../models/lobby.model";
 import {AttackEvent, CreateRoomEvent, DrawCardsEvent, JoinRoomEvent, PlayCardEvent} from "../types/game.type";
-import {GameEventBatch} from "../utils/game.events";
 
 /**
  * Interface pour un socket authentifié
@@ -21,6 +21,7 @@ interface AuthenticatedSocket extends Socket {
  */
 export class SocketHandler {
     private io: Server;
+    private lobbies: Map<string, Lobby>;
     private games: Map<string, Game>;
 
     constructor(httpServer: HTTPServer) {
@@ -30,6 +31,7 @@ export class SocketHandler {
                 credentials: true,
             },
         });
+        this.lobbies = new Map();
         this.games = new Map();
         this.setupAuthMiddleware();
         this.setupEventHandlers();
@@ -80,7 +82,7 @@ export class SocketHandler {
     }
 
     /**
-     * Crée une nouvelle room
+     * Crée un nouveau lobby
      */
     private async handleCreateRoom(socket: AuthenticatedSocket, data: CreateRoomEvent): Promise<void> {
         try {
@@ -109,22 +111,22 @@ export class SocketHandler {
                 return;
             }
 
-            // Créer un Game directement (plus besoin de Room !)
-            const gameId = uuidv4();
-            const game = new Game(gameId, socket.id, socket.userId!, data.deckId);
+            // Créer un Lobby
+            const lobbyId = uuidv4();
+            const lobby = new Lobby(lobbyId, socket.id, socket.userId!, data.deckId);
 
-            this.games.set(gameId, game);
-            socket.join(gameId);
+            this.lobbies.set(lobbyId, lobby);
+            socket.join(lobbyId);
 
             socket.emit("roomCreated", {
-                roomId: gameId,
+                roomId: lobbyId,
                 message: "Room créée avec succès. En attente d'un adversaire...",
             });
 
             // Notifier tous les clients de la nouvelle room disponible
-            this.io.emit("roomsListUpdated", this.getAvailableGames());
+            this.io.emit("roomsListUpdated", this.getAvailableLobbies());
 
-            console.log(`🎮 Room created: ${gameId} by ${socket.email}`);
+            console.log(`🎮 Lobby created: ${lobbyId} by ${socket.email}`);
         } catch (error) {
             console.error("Error creating room:", error);
             socket.emit("error", {message: "Erreur lors de la création de la room"});
@@ -132,19 +134,19 @@ export class SocketHandler {
     }
 
     /**
-     * Rejoint une room existante
+     * Rejoint un lobby et démarre la partie
      */
     private async handleJoinRoom(socket: AuthenticatedSocket, data: JoinRoomEvent): Promise<void> {
         try {
-            const game = this.games.get(data.roomId);
+            const lobby = this.lobbies.get(data.roomId);
 
-            if (!game) {
+            if (!lobby) {
                 socket.emit("error", {message: "Room non trouvée"});
                 return;
             }
 
-            if (!game.isWaiting() || game.isFull()) {
-                socket.emit("error", {message: "Cannot join this game"});
+            if (lobby.isFull()) {
+                socket.emit("error", {message: "Cette room est déjà complète"});
                 return;
             }
 
@@ -173,18 +175,21 @@ export class SocketHandler {
                 return;
             }
 
-            // Récupérer le deck de l'hôte en utilisant le deckId stocké dans Game
+            // Ajouter le guest au lobby
+            const added = lobby.addGuest(socket.id, socket.userId!, data.deckId);
+
+            if (!added) {
+                socket.emit("error", {message: "Impossible de rejoindre cette room"});
+                return;
+            }
+
+            // Récupérer les decks pour créer le jeu
+            const host = lobby.getHost();
+            const guest = lobby.getGuest()!;
+
             const hostDeck = await prisma.deck.findFirst({
-                where: {
-                    id: game.getHostDeckId(),
-                },
-                include: {
-                    cards: {
-                        include: {
-                            card: true,
-                        },
-                    },
-                },
+                where: {id: host.deckId},
+                include: {cards: {include: {card: true}}},
             });
 
             if (!hostDeck) {
@@ -192,41 +197,37 @@ export class SocketHandler {
                 return;
             }
 
-            // Démarrer la partie
-            const hostCards = hostDeck.cards.map((dc) => dc.card);
-            const guestCards = deck.cards.map((dc) => dc.card);
-
-            const result = game.startWithGuest(
-                socket.id,
-                socket.userId!,
-                data.deckId,
-                hostCards,
-                guestCards
+            // Créer le jeu
+            const gameId = data.roomId;
+            const game = new Game(
+                gameId,
+                host.socketId,
+                hostDeck.cards.map(dc => dc.card),
+                guest.socketId,
+                deck.cards.map(dc => dc.card)
             );
 
-            if (!result.success) {
-                socket.emit("error", {message: result.message});
-                return;
-            }
+            this.games.set(gameId, game);
+            socket.join(gameId);
 
-            socket.join(data.roomId);
+            // Supprimer le lobby
+            this.lobbies.delete(data.roomId);
 
-            // Notifier les deux joueurs que la partie commence
-            const updatedSocketIds = game.getSocketIds();
-            this.io.to(updatedSocketIds.host).emit("gameStarted", {
+            // Notifier les deux joueurs
+            this.io.to(host.socketId).emit("gameStarted", {
                 message: "Un adversaire a rejoint ! La partie commence !",
-                gameState: game.getStateForPlayer(updatedSocketIds.host),
+                gameState: game.getStateForPlayer(host.socketId),
             });
 
-            this.io.to(updatedSocketIds.guest!).emit("gameStarted", {
+            this.io.to(guest.socketId).emit("gameStarted", {
                 message: "Vous avez rejoint la partie ! La partie commence !",
-                gameState: game.getStateForPlayer(updatedSocketIds.guest!),
+                gameState: game.getStateForPlayer(guest.socketId),
             });
 
             // Notifier tous les clients que la room n'est plus disponible
-            this.io.emit("roomsListUpdated", this.getAvailableGames());
+            this.io.emit("roomsListUpdated", this.getAvailableLobbies());
 
-            console.log(`🎮 Game started in room ${data.roomId}`);
+            console.log(`🎮 Game started in room ${gameId}`);
         } catch (error) {
             console.error("Error joining room:", error);
             socket.emit("error", {message: "Erreur lors de la jonction à la room"});
@@ -234,10 +235,10 @@ export class SocketHandler {
     }
 
     /**
-     * Retourne la liste des rooms disponibles
+     * Retourne la liste des lobbies disponibles
      */
     private handleGetRooms(socket: AuthenticatedSocket): void {
-        socket.emit("roomsList", this.getAvailableGames());
+        socket.emit("roomsList", this.getAvailableLobbies());
     }
 
     /**
@@ -251,8 +252,29 @@ export class SocketHandler {
             return;
         }
 
-        const batch = game.drawCards(socket.id);
-        this.emitEventBatch(game, batch);
+        const result = game.drawCards(socket.id);
+
+        if (!result.success) {
+            socket.emit("error", {message: result.message});
+            return;
+        }
+
+        // Envoyer l'état mis à jour au joueur
+        socket.emit("gameStateUpdated", {
+            message: result.message,
+            gameState: game.getStateForPlayer(socket.id),
+        });
+
+        // Notifier l'adversaire
+        if (result.notifyOpponent) {
+            const opponentSocketId = this.getOpponentSocketId(game, socket.id);
+            if (opponentSocketId) {
+                this.io.to(opponentSocketId).emit("gameStateUpdated", {
+                    message: result.notifyOpponent,
+                    gameState: game.getStateForPlayer(opponentSocketId),
+                });
+            }
+        }
     }
 
     /**
@@ -266,8 +288,29 @@ export class SocketHandler {
             return;
         }
 
-        const batch = game.playCard(socket.id, data.cardIndex);
-        this.emitEventBatch(game, batch);
+        const result = game.playCard(socket.id, data.cardIndex);
+
+        if (!result.success) {
+            socket.emit("error", {message: result.message});
+            return;
+        }
+
+        // Envoyer l'état mis à jour au joueur
+        socket.emit("gameStateUpdated", {
+            message: result.message,
+            gameState: game.getStateForPlayer(socket.id),
+        });
+
+        // Notifier l'adversaire
+        if (result.notifyOpponent) {
+            const opponentSocketId = this.getOpponentSocketId(game, socket.id);
+            if (opponentSocketId) {
+                this.io.to(opponentSocketId).emit("gameStateUpdated", {
+                    message: result.notifyOpponent,
+                    gameState: game.getStateForPlayer(opponentSocketId),
+                });
+            }
+        }
     }
 
     /**
@@ -281,11 +324,46 @@ export class SocketHandler {
             return;
         }
 
-        const batch = game.attack(socket.id);
-        this.emitEventBatch(game, batch);
+        const result = game.attack(socket.id);
 
-        // Si la partie est terminée, supprimer la game après un délai
-        if (game.getStatus() === 'finished') {
+        if (!result.success) {
+            socket.emit("error", {message: result.message});
+            return;
+        }
+
+        // Envoyer l'état mis à jour au joueur
+        socket.emit("gameStateUpdated", {
+            message: result.message,
+            gameState: game.getStateForPlayer(socket.id),
+        });
+
+        // Notifier l'adversaire
+        const opponentSocketId = this.getOpponentSocketId(game, socket.id);
+        if (opponentSocketId && result.notifyOpponent) {
+            this.io.to(opponentSocketId).emit("gameStateUpdated", {
+                message: result.notifyOpponent,
+                gameState: game.getStateForPlayer(opponentSocketId),
+            });
+        }
+
+        // Si la partie est terminée
+        if (result.gameEnded && result.winner) {
+            const winnerSocketId = result.winner;
+            const loserSocketId = opponentSocketId;
+
+            this.io.to(winnerSocketId).emit("gameEnded", {
+                winner: winnerSocketId,
+                message: "Vous avez gagné !",
+            });
+
+            if (loserSocketId) {
+                this.io.to(loserSocketId).emit("gameEnded", {
+                    winner: winnerSocketId,
+                    message: "Vous avez perdu !",
+                });
+            }
+
+            // Supprimer la game après un délai
             setTimeout(() => {
                 this.games.delete(data.roomId);
                 console.log(`🗑️ Room ${data.roomId} supprimée`);
@@ -299,67 +377,48 @@ export class SocketHandler {
     private handleDisconnect(socket: AuthenticatedSocket): void {
         console.log(`❌ User disconnected: ${socket.email} (${socket.id})`);
 
+        // Supprimer les lobbies où le joueur était présent
+        for (const [lobbyId, lobby] of this.lobbies.entries()) {
+            if (lobby.hasPlayer(socket.id)) {
+                this.lobbies.delete(lobbyId);
+                this.io.emit("roomsListUpdated", this.getAvailableLobbies());
+            }
+        }
+
         // Trouver et supprimer les games où le joueur était présent
         for (const [gameId, game] of this.games.entries()) {
             if (game.hasPlayer(socket.id)) {
                 const socketIds = game.getSocketIds();
 
                 // Notifier l'autre joueur
-                if (socketIds.guest && socketIds.guest !== socket.id) {
-                    this.io.to(socketIds.guest).emit("opponentDisconnected", {
-                        message: "Votre adversaire s'est déconnecté. La partie est terminée.",
-                    });
-                } else if (socketIds.host !== socket.id) {
-                    this.io.to(socketIds.host).emit("opponentDisconnected", {
-                        message: "Votre adversaire s'est déconnecté. La partie est terminée.",
-                    });
-                }
+                const opponentSocketId = socket.id === socketIds.host ? socketIds.guest : socketIds.host;
+
+                this.io.to(opponentSocketId).emit("opponentDisconnected", {
+                    message: "Votre adversaire s'est déconnecté. La partie est terminée.",
+                });
 
                 this.games.delete(gameId);
-                this.io.emit("roomsListUpdated", this.getAvailableGames());
             }
         }
     }
 
     /**
-     * Émet tous les événements d'un batch
+     * Retourne le socketId de l'adversaire
      */
-    private emitEventBatch(game: Game, batch: GameEventBatch): void {
+    private getOpponentSocketId(game: Game, socketId: string): string | null {
         const socketIds = game.getSocketIds();
-
-        batch.events.forEach(event => {
-            let targetSocketId: string | null = null;
-
-            if (event.target === 'host') {
-                targetSocketId = socketIds.host;
-            } else if (event.target === 'guest') {
-                targetSocketId = socketIds.guest;
-            } else if (event.target === 'both') {
-                // Émettre aux deux joueurs
-                if (socketIds.host) {
-                    this.io.to(socketIds.host).emit(event.type, event.data);
-                }
-                if (socketIds.guest) {
-                    this.io.to(socketIds.guest).emit(event.type, event.data);
-                }
-                return;
-            }
-
-            if (targetSocketId) {
-                this.io.to(targetSocketId).emit(event.type, event.data);
-            }
-        });
+        return socketId === socketIds.host ? socketIds.guest : socketIds.host;
     }
 
     /**
-     * Retourne la liste des games disponibles (en attente)
+     * Retourne la liste des lobbies disponibles
      */
-    private getAvailableGames(): Array<{ id: string; hostSocketId: string }> {
-        return Array.from(this.games.values())
-            .filter(game => game.isWaiting() && !game.isFull())
-            .map(game => ({
-                id: game.getId(),
-                hostSocketId: game.getSocketIds().host,
+    private getAvailableLobbies(): Array<{ id: string; hostSocketId: string }> {
+        return Array.from(this.lobbies.values())
+            .filter(lobby => !lobby.isFull())
+            .map(lobby => ({
+                id: lobby.getId(),
+                hostSocketId: lobby.getHost().socketId,
             }));
     }
 }

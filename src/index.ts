@@ -7,7 +7,6 @@ import {swaggerDocument} from "./docs";
 import authRoutes from "./routes/auth.route";
 import cardRoutes from "./routes/card.route";
 import deckRoutes from "./routes/deck.route";
-import {SocketHandler} from "./sockets/game.socket";
 
 // Create Express app
 const app = express();

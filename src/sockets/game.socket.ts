@@ -21,8 +21,8 @@ interface AuthenticatedSocket extends Socket {
  */
 export class SocketHandler {
     private io: Server;
-    private lobbies: Map<string, Lobby>;
-    private games: Map<string, Game>;
+    private lobbies: Lobby[] = [];
+    private games: Game[] = [];
 
     constructor(httpServer: HTTPServer) {
         this.io = new Server(httpServer, {
@@ -31,8 +31,6 @@ export class SocketHandler {
                 credentials: true,
             },
         });
-        this.lobbies = new Map();
-        this.games = new Map();
         this.setupAuthMiddleware();
         this.setupEventHandlers();
     }
@@ -115,7 +113,7 @@ export class SocketHandler {
             const lobbyId = uuidv4();
             const lobby = new Lobby(lobbyId, socket.id, socket.userId!, data.deckId);
 
-            this.lobbies.set(lobbyId, lobby);
+            this.lobbies.push(lobby);
             socket.join(lobbyId);
 
             socket.emit("roomCreated", {
@@ -138,7 +136,7 @@ export class SocketHandler {
      */
     private async handleJoinRoom(socket: AuthenticatedSocket, data: JoinRoomEvent): Promise<void> {
         try {
-            const lobby = this.lobbies.get(data.roomId);
+            const lobby = this.lobbies.find(l => l.getId() === data.roomId);
 
             if (!lobby) {
                 socket.emit("error", {message: "Room non trouvée"});
@@ -207,11 +205,11 @@ export class SocketHandler {
                 deck.cards.map(dc => dc.card)
             );
 
-            this.games.set(gameId, game);
+            this.games.push(game);
             socket.join(gameId);
 
             // Supprimer le lobby
-            this.lobbies.delete(data.roomId);
+            this.lobbies = this.lobbies.filter(l => l.getId() !== data.roomId);
 
             // Notifier les deux joueurs
             this.io.to(host.socketId).emit("gameStarted", {
@@ -245,7 +243,7 @@ export class SocketHandler {
      * Pioche des cartes
      */
     private handleDrawCards(socket: AuthenticatedSocket, data: DrawCardsEvent): void {
-        const game = this.games.get(data.roomId);
+        const game = this.games.find(g => g.getId() === data.roomId);
 
         if (!game) {
             socket.emit("error", {message: "Game not found"});
@@ -281,7 +279,7 @@ export class SocketHandler {
      * Joue une carte sur le board
      */
     private handlePlayCard(socket: AuthenticatedSocket, data: PlayCardEvent): void {
-        const game = this.games.get(data.roomId);
+        const game = this.games.find(g => g.getId() === data.roomId);
 
         if (!game) {
             socket.emit("error", {message: "Game not found"});
@@ -317,7 +315,7 @@ export class SocketHandler {
      * Attaque le Pokemon adverse
      */
     private handleAttack(socket: AuthenticatedSocket, data: AttackEvent): void {
-        const game = this.games.get(data.roomId);
+        const game = this.games.find(g => g.getId() === data.roomId);
 
         if (!game) {
             socket.emit("error", {message: "Game not found"});
@@ -365,7 +363,7 @@ export class SocketHandler {
 
             // Supprimer la game après un délai
             setTimeout(() => {
-                this.games.delete(data.roomId);
+                this.games = this.games.filter(g => g.getId() !== data.roomId);
                 console.log(`🗑️ Room ${data.roomId} supprimée`);
             }, 5000);
         }
@@ -378,43 +376,42 @@ export class SocketHandler {
         console.log(`❌ User disconnected: ${socket.email} (${socket.id})`);
 
         // Supprimer les lobbies où le joueur était présent
-        for (const [lobbyId, lobby] of this.lobbies.entries()) {
-            if (lobby.hasPlayer(socket.id)) {
-                this.lobbies.delete(lobbyId);
-                this.io.emit("roomsListUpdated", this.getAvailableLobbies());
-            }
+        const hadLobby = this.lobbies.some(lobby => lobby.hasPlayer(socket.id));
+        this.lobbies = this.lobbies.filter(lobby => !lobby.hasPlayer(socket.id));
+
+        if (hadLobby) {
+            this.io.emit("roomsListUpdated", this.getAvailableLobbies());
         }
 
         // Trouver et supprimer les games où le joueur était présent
-        for (const [gameId, game] of this.games.entries()) {
-            if (game.hasPlayer(socket.id)) {
-                const socketIds = game.getSocketIds();
+        const gamesToRemove = this.games.filter(game => game.hasPlayer(socket.id));
 
-                // Notifier l'autre joueur
-                const opponentSocketId = socket.id === socketIds.host ? socketIds.guest : socketIds.host;
+        for (const game of gamesToRemove) {
+            const socketIds = game.getSocketIds();
 
-                this.io.to(opponentSocketId).emit("opponentDisconnected", {
-                    message: "Votre adversaire s'est déconnecté. La partie est terminée.",
-                });
+            // Notifier l'autre joueur
+            const opponentSocketId = socket.id === socketIds.host ? socketIds.guest : socketIds.host;
 
-                this.games.delete(gameId);
-            }
+            this.io.to(opponentSocketId).emit("opponentDisconnected", {
+                message: "Votre adversaire s'est déconnecté. La partie est terminée.",
+            });
         }
+
+        this.games = this.games.filter(game => !game.hasPlayer(socket.id));
     }
 
     /**
      * Retourne le socketId de l'adversaire
      */
     private getOpponentSocketId(game: Game, socketId: string): string | null {
-        const socketIds = game.getSocketIds();
-        return socketId === socketIds.host ? socketIds.guest : socketIds.host;
+        return game.getOpponentSocketId(socketId);
     }
 
     /**
      * Retourne la liste des lobbies disponibles
      */
     private getAvailableLobbies(): Array<{ id: string; hostSocketId: string }> {
-        return Array.from(this.lobbies.values())
+        return this.lobbies
             .filter(lobby => !lobby.isFull())
             .map(lobby => ({
                 id: lobby.getId(),

@@ -19,8 +19,10 @@ export interface GameActionResult {
  */
 export class Game {
     private readonly id: string;
-    private readonly players: Map<string, Player>; // socketId -> Player
-    private readonly socketIds: [string, string]; // [host, guest]
+    private readonly hostSocketId: string;
+    private readonly guestSocketId: string;
+    private readonly hostPlayer: Player;
+    private readonly guestPlayer: Player;
     private currentPlayer: Player;
     private status: GameStatus = GameStatus.PLAYING;
     private winner?: string;
@@ -33,25 +35,20 @@ export class Game {
         guestDeck: Card[]
     ) {
         this.id = id;
-        this.socketIds = [hostSocketId, guestSocketId];
-
-        const hostPlayer = new Player(hostDeck);
-        const guestPlayer = new Player(guestDeck);
-
-        this.players = new Map([
-            [hostSocketId, hostPlayer],
-            [guestSocketId, guestPlayer],
-        ]);
+        this.hostSocketId = hostSocketId;
+        this.guestSocketId = guestSocketId;
+        this.hostPlayer = new Player(hostDeck);
+        this.guestPlayer = new Player(guestDeck);
 
         // Host commence toujours
-        this.currentPlayer = hostPlayer;
+        this.currentPlayer = this.hostPlayer;
     }
 
     /**
      * Pioche des cartes jusqu'à remplir la main (5 cartes max)
      */
     public drawCards(socketId: string): GameActionResult {
-        const player = this.players.get(socketId);
+        const player = this.getPlayerBySocketId(socketId);
 
         if (!player) {
             return {success: false, message: "Joueur non trouvé"};
@@ -74,7 +71,7 @@ export class Game {
      * Joue une carte de la main sur le board
      */
     public playCard(socketId: string, cardIndex: number): GameActionResult {
-        const player = this.players.get(socketId);
+        const player = this.getPlayerBySocketId(socketId);
 
         if (!player) {
             return {success: false, message: "Joueur non trouvé"};
@@ -101,9 +98,8 @@ export class Game {
      * Attaque le Pokemon adverse
      */
     public attack(attackerSocketId: string): GameActionResult {
-        const attacker = this.players.get(attackerSocketId);
-        const defenderSocketId = this.getOpponentSocketId(attackerSocketId);
-        const defender = defenderSocketId ? this.players.get(defenderSocketId) : null;
+        const attacker = this.getPlayerBySocketId(attackerSocketId);
+        const defender = this.getOpponentBySocketId(attackerSocketId);
 
         if (!attacker || !defender) {
             return {success: false, message: "Erreur lors de la récupération des joueurs"};
@@ -151,9 +147,8 @@ export class Game {
      * (cache la main et le deck de l'adversaire)
      */
     public getStateForPlayer(socketId: string): any {
-        const player = this.players.get(socketId);
-        const opponentSocketId = this.getOpponentSocketId(socketId);
-        const opponent = opponentSocketId ? this.players.get(opponentSocketId) : null;
+        const player = this.getPlayerBySocketId(socketId);
+        const opponent = this.getOpponentBySocketId(socketId);
 
         if (!player || !opponent) {
             return null;
@@ -196,7 +191,7 @@ export class Game {
      * Vérifie si un socketId appartient à cette partie
      */
     public hasPlayer(socketId: string): boolean {
-        return this.players.has(socketId);
+        return this.hostSocketId === socketId || this.guestSocketId === socketId;
     }
 
     /**
@@ -204,19 +199,43 @@ export class Game {
      */
     public getSocketIds(): { host: string; guest: string } {
         return {
-            host: this.socketIds[0],
-            guest: this.socketIds[1],
+            host: this.hostSocketId,
+            guest: this.guestSocketId,
         };
+    }
+
+    /**
+     * Retourne le joueur correspondant au socketId
+     */
+    private getPlayerBySocketId(socketId: string): Player | null {
+        if (socketId === this.hostSocketId) {
+            return this.hostPlayer;
+        } else if (socketId === this.guestSocketId) {
+            return this.guestPlayer;
+        }
+        return null;
+    }
+
+    /**
+     * Retourne l'adversaire du joueur correspondant au socketId
+     */
+    private getOpponentBySocketId(socketId: string): Player | null {
+        if (socketId === this.hostSocketId) {
+            return this.guestPlayer;
+        } else if (socketId === this.guestSocketId) {
+            return this.hostPlayer;
+        }
+        return null;
     }
 
     /**
      * Retourne le socketId de l'adversaire
      */
-    private getOpponentSocketId(socketId: string): string | null {
-        if (socketId === this.socketIds[0]) {
-            return this.socketIds[1];
-        } else if (socketId === this.socketIds[1]) {
-            return this.socketIds[0];
+    public getOpponentSocketId(socketId: string): string | null {
+        if (socketId === this.hostSocketId) {
+            return this.guestSocketId;
+        } else if (socketId === this.guestSocketId) {
+            return this.hostSocketId;
         }
         return null;
     }
@@ -225,18 +244,10 @@ export class Game {
      * Change le tour au joueur suivant
      */
     private switchTurn(): void {
-        const currentSocketId = [...this.players.entries()].find(
-            ([_, player]) => player === this.currentPlayer
-        )?.[0];
-
-        if (currentSocketId) {
-            const opponentSocketId = this.getOpponentSocketId(currentSocketId);
-            if (opponentSocketId) {
-                const opponent = this.players.get(opponentSocketId);
-                if (opponent) {
-                    this.currentPlayer = opponent;
-                }
-            }
+        if (this.currentPlayer === this.hostPlayer) {
+            this.currentPlayer = this.guestPlayer;
+        } else {
+            this.currentPlayer = this.hostPlayer;
         }
     }
 
@@ -245,18 +256,15 @@ export class Game {
      * @internal
      */
     public getState() {
-        const hostPlayer = this.players.get(this.socketIds[0]);
-        const guestPlayer = this.players.get(this.socketIds[1]);
-
         return {
             roomId: this.id,
             host: {
-                socketId: this.socketIds[0],
-                board: hostPlayer?.getBoard() || null,
+                socketId: this.hostSocketId,
+                board: this.hostPlayer.getBoard(),
             },
             guest: {
-                socketId: this.socketIds[1],
-                board: guestPlayer?.getBoard() || null,
+                socketId: this.guestSocketId,
+                board: this.guestPlayer.getBoard(),
             },
             status: this.status,
             winner: this.winner,
